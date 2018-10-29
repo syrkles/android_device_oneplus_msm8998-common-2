@@ -17,6 +17,9 @@
 */
 package org.omnirom.device;
 
+import static android.provider.Settings.Global.ZEN_MODE_OFF;
+import static android.provider.Settings.Global.ZEN_MODE_IMPORTANT_INTERRUPTIONS;
+
 import android.app.ActivityManagerNative;
 import android.app.NotificationManager;
 import android.content.BroadcastReceiver;
@@ -42,6 +45,7 @@ import android.os.RemoteException;
 import android.os.ServiceManager;
 import android.os.SystemClock;
 import android.os.SystemProperties;
+import android.os.UEventObserver;
 import android.os.UserHandle;
 import android.provider.Settings;
 import android.provider.Settings.Global;
@@ -54,30 +58,31 @@ import android.view.KeyEvent;
 import android.view.HapticFeedbackConstants;
 import android.view.WindowManagerGlobal;
 
-import com.android.internal.os.DeviceKeyHandler;
+import android.view.InputDevice;
+import android.view.KeyCharacterMap;
+import android.os.Looper;
+import android.hardware.input.InputManager;
+
+import com.android.internal.os.AlternativeDeviceKeyHandler;
 import com.android.internal.util.ArrayUtils;
-import com.android.internal.util.liquid.LiquidUtils;
 import com.android.internal.statusbar.IStatusBarService;
 
-public class KeyHandler implements DeviceKeyHandler {
+public class KeyHandler implements AlternativeDeviceKeyHandler {
 
     private static final String TAG = "KeyHandler";
     private static final boolean DEBUG = false;
-    private static final boolean DEBUG_SENSOR = false;
+    private static final boolean DEBUG_SENSOR = true;
 
     protected static final int GESTURE_REQUEST = 1;
     private static final int GESTURE_WAKELOCK_DURATION = 2000;
-    private static final String KEY_CONTROL_PATH = "/proc/touchpanel/key_disable";
-    private static final String FPC_CONTROL_PATH = "/sys/devices/soc/soc:fpc_fpc1020/proximity_state";
-    private static final String FPC_KEY_CONTROL_PATH = "/sys/devices/soc/soc:fpc_fpc1020/key_disable";
-    private static final String GOODIX_CONTROL_PATH = "/sys/devices/soc/soc:goodix_fp/proximity_state";
+    private static final String GOODIX_CONTROL_PATH = "/sys/devices/platform/soc/soc:goodix_fp/proximity_state";
 
     private static final int GESTURE_CIRCLE_SCANCODE = 250;
-    private static final int GESTURE_V_SCANCODE = 255;
+    private static final int GESTURE_V_SCANCODE = 252;
     private static final int GESTURE_II_SCANCODE = 251;
     private static final int GESTURE_LEFT_V_SCANCODE = 253;
     private static final int GESTURE_RIGHT_V_SCANCODE = 254;
-    private static final int GESTURE_A_SCANCODE = 252;
+    private static final int GESTURE_A_SCANCODE = 255;
     private static final int GESTURE_RIGHT_SWIPE_SCANCODE = 63;
     private static final int GESTURE_LEFT_SWIPE_SCANCODE = 64;
     private static final int GESTURE_DOWN_SWIPE_SCANCODE = 65;
@@ -95,34 +100,7 @@ public class KeyHandler implements DeviceKeyHandler {
     private static final String DOZE_INTENT = "com.android.systemui.doze.pulse";
     private static final int HANDWAVE_MAX_DELTA_MS = 1000;
     private static final int POCKET_MIN_DELTA_MS = 5000;
-    private static final int FP_GESTURE_SWIPE_DOWN = 108;
-    private static final int FP_GESTURE_SWIPE_UP = 103;
-    private static final int FP_GESTURE_SWIPE_LEFT = 105;
-    private static final int FP_GESTURE_SWIPE_RIGHT = 106;
     private static final int FP_GESTURE_LONG_PRESS = 305;
-    private static final boolean sIsOnePlus5t = android.os.Build.DEVICE.equals("OnePlus5T");
-
-    private static final int[] sSupportedGestures5t = new int[]{
-        GESTURE_II_SCANCODE,
-        GESTURE_CIRCLE_SCANCODE,
-        GESTURE_V_SCANCODE,
-        GESTURE_A_SCANCODE,
-        GESTURE_LEFT_V_SCANCODE,
-        GESTURE_RIGHT_V_SCANCODE,
-        GESTURE_DOWN_SWIPE_SCANCODE,
-        GESTURE_UP_SWIPE_SCANCODE,
-        GESTURE_LEFT_SWIPE_SCANCODE,
-        GESTURE_RIGHT_SWIPE_SCANCODE,
-        KEY_DOUBLE_TAP,
-        KEY_SLIDER_TOP,
-        KEY_SLIDER_CENTER,
-        KEY_SLIDER_BOTTOM,
-        FP_GESTURE_SWIPE_DOWN,
-        FP_GESTURE_SWIPE_UP,
-        FP_GESTURE_SWIPE_LEFT,
-        FP_GESTURE_SWIPE_RIGHT,
-        FP_GESTURE_LONG_PRESS,
-    };
 
     private static final int[] sSupportedGestures = new int[]{
         GESTURE_II_SCANCODE,
@@ -138,13 +116,8 @@ public class KeyHandler implements DeviceKeyHandler {
         KEY_DOUBLE_TAP,
         KEY_SLIDER_TOP,
         KEY_SLIDER_CENTER,
-        KEY_SLIDER_BOTTOM
-    };
-
-    private static final int[] sHandledGestures = new int[]{
-        KEY_SLIDER_TOP,
-        KEY_SLIDER_CENTER,
-        KEY_SLIDER_BOTTOM
+        KEY_SLIDER_BOTTOM,
+        FP_GESTURE_LONG_PRESS,
     };
 
     private static final int[] sProxiCheckedGestures = new int[]{
@@ -190,14 +163,8 @@ public class KeyHandler implements DeviceKeyHandler {
             mProxyIsNear = event.values[0] == 1;
             if (DEBUG_SENSOR) Log.i(TAG, "mProxyIsNear = " + mProxyIsNear + " mProxyWasNear = " + mProxyWasNear);
             if (mUseProxiCheck) {
-                if (!sIsOnePlus5t) {
-                    if (Utils.fileWritable(FPC_CONTROL_PATH)) {
-                        Utils.writeValue(FPC_CONTROL_PATH, mProxyIsNear ? "1" : "0");
-                    }
-                } else {
-                    if (Utils.fileWritable(GOODIX_CONTROL_PATH)) {
-                        Utils.writeValue(GOODIX_CONTROL_PATH, mProxyIsNear ? "1" : "0");
-                    }
+                if (Utils.fileWritable(GOODIX_CONTROL_PATH)) {
+                    Utils.writeValue(GOODIX_CONTROL_PATH, mProxyIsNear ? "1" : "0");
                 }
             }
             if (mUseWaveCheck || mUsePocketCheck) {
@@ -241,10 +208,10 @@ public class KeyHandler implements DeviceKeyHandler {
 
         void observe() {
             mContext.getContentResolver().registerContentObserver(Settings.System.getUriFor(
-                    Settings.System.OMNI_DEVICE_PROXI_CHECK_ENABLED),
+                    Settings.System.CUSTOM_DEVICE_PROXI_CHECK_ENABLED),
                     false, this);
             mContext.getContentResolver().registerContentObserver(Settings.System.getUriFor(
-                    Settings.System.OMNI_DEVICE_FEATURE_SETTINGS),
+                    Settings.System.CUSTOM_DEVICE_FEATURE_SETTINGS),
                     false, this);
             update();
             updateDozeSettings();
@@ -258,7 +225,7 @@ public class KeyHandler implements DeviceKeyHandler {
         @Override
         public void onChange(boolean selfChange, Uri uri) {
             if (uri.equals(Settings.System.getUriFor(
-                    Settings.System.OMNI_DEVICE_FEATURE_SETTINGS))){
+                    Settings.System.CUSTOM_DEVICE_FEATURE_SETTINGS))){
                 updateDozeSettings();
                 return;
             }
@@ -267,7 +234,7 @@ public class KeyHandler implements DeviceKeyHandler {
 
         public void update() {
             mUseProxiCheck = Settings.System.getIntForUser(
-                    mContext.getContentResolver(), Settings.System.OMNI_DEVICE_PROXI_CHECK_ENABLED, 1,
+                    mContext.getContentResolver(), Settings.System.CUSTOM_DEVICE_PROXI_CHECK_ENABLED, 1,
                     UserHandle.USER_CURRENT) == 1;
         }
     }
@@ -297,11 +264,32 @@ public class KeyHandler implements DeviceKeyHandler {
         mNoMan = (NotificationManager) mContext.getSystemService(Context.NOTIFICATION_SERVICE);
         mAudioManager = (AudioManager) mContext.getSystemService(Context.AUDIO_SERVICE);
         mSensorManager = (SensorManager) mContext.getSystemService(Context.SENSOR_SERVICE);
-        mTiltSensor = getSensor(mSensorManager, "com.oneplus.sensor.pickup");
-        mPocketSensor = getSensor(mSensorManager, "com.oneplus.sensor.pocket");
+        mTiltSensor = getSensor(mSensorManager, "oneplus.sensor.pickup");
+        mPocketSensor = getSensor(mSensorManager, "oneplus.sensor.pocket");
         IntentFilter screenStateFilter = new IntentFilter(Intent.ACTION_SCREEN_ON);
         screenStateFilter.addAction(Intent.ACTION_SCREEN_OFF);
         mContext.registerReceiver(mScreenStateReceiver, screenStateFilter);
+        (new UEventObserver() {
+            @Override
+            public void onUEvent(UEventObserver.UEvent event) {
+                try {
+                    String state = event.get("STATE");
+                    boolean ringing = state.contains("USB=0");
+                    boolean silent = state.contains("(null)=0");
+                    boolean vibrate = state.contains("USB_HOST=0");
+                    android.util.Log.v("DeviceParts", "Got ringing = " + ringing + ", silent = " + silent + ", vibrate = " + vibrate);
+                    if(ringing && !silent && !vibrate)
+                        doHandleSliderAction(2);
+                    if(silent && !ringing && !vibrate)
+                        doHandleSliderAction(0);
+                    if(vibrate && !silent && !ringing)
+                        doHandleSliderAction(1);
+                } catch(Exception e) {
+                    android.util.Log.d("DeviceParts", "Failed parsing uevent", e);
+                }
+
+            }
+    }).startObserving("DEVPATH=/devices/platform/soc/soc:tri_state_key");
     }
 
     private class EventHandler extends Handler {
@@ -317,26 +305,8 @@ public class KeyHandler implements DeviceKeyHandler {
         }
 
         isFpgesture = false;
-        boolean isKeySupported = ArrayUtils.contains(sHandledGestures, event.getScanCode());
-        if (isKeySupported) {
-            if (DEBUG) Log.i(TAG, "scanCode=" + event.getScanCode());
-            switch(event.getScanCode()) {
-                case KEY_SLIDER_TOP:
-                    if (DEBUG) Log.i(TAG, "KEY_SLIDER_TOP");
-                    doHandleSliderAction(0);
-                    return true;
-                case KEY_SLIDER_CENTER:
-                    if (DEBUG) Log.i(TAG, "KEY_SLIDER_CENTER");
-                    doHandleSliderAction(1);
-                    return true;
-                case KEY_SLIDER_BOTTOM:
-                    if (DEBUG) Log.i(TAG, "KEY_SLIDER_BOTTOM");
-                    doHandleSliderAction(2);
-                    return true;
-            }
-        }
 
-        if (DEBUG) Log.i(TAG, "nav_code=" + event.getScanCode());
+        if (DEBUG) Log.i(TAG, "nav_code= " + event.getScanCode());
         int fpcode = event.getScanCode();
         mFPcheck = canHandleKeyEvent(event);
         String value = getGestureValueForFPScanCode(fpcode);
@@ -348,16 +318,12 @@ public class KeyHandler implements DeviceKeyHandler {
                     mContext.startActivity(intent);
             }
         }
-        return isKeySupported;
+        return isFpgesture;
     }
 
     @Override
     public boolean canHandleKeyEvent(KeyEvent event) {
-        if (sIsOnePlus5t) {
-            return ArrayUtils.contains(sSupportedGestures5t, event.getScanCode());
-        } else {
-            return ArrayUtils.contains(sSupportedGestures, event.getScanCode());
-        }
+        return ArrayUtils.contains(sSupportedGestures, event.getScanCode());
     }
 
     @Override
@@ -459,10 +425,8 @@ public class KeyHandler implements DeviceKeyHandler {
     }
 
     private void enableGoodix() {
-        if (sIsOnePlus5t) {
-            if (Utils.fileWritable(GOODIX_CONTROL_PATH)) {
-                Utils.writeValue(GOODIX_CONTROL_PATH, "0");
-            }
+        if (Utils.fileWritable(GOODIX_CONTROL_PATH)) {
+            Utils.writeValue(GOODIX_CONTROL_PATH, "0");
         }
     }
 
@@ -482,7 +446,7 @@ public class KeyHandler implements DeviceKeyHandler {
 
     private int getSliderAction(int position) {
         String value = Settings.System.getStringForUser(mContext.getContentResolver(),
-                    Settings.System.OMNI_BUTTON_EXTRA_KEY_MAPPING,
+                    Settings.System.CUSTOM_BUTTON_EXTRA_KEY_MAPPING,
                     UserHandle.USER_CURRENT);
         final String defaultValue = DeviceSettings.SLIDER_DEFAULT_VALUE;
 
@@ -502,17 +466,13 @@ public class KeyHandler implements DeviceKeyHandler {
     private void doHandleSliderAction(int position) {
         int action = getSliderAction(position);
         if ( action == 0) {
-            mNoMan.setZenMode(Global.ZEN_MODE_OFF_ONLY, null, TAG);
+            mNoMan.setZenMode(ZEN_MODE_OFF, null, TAG);
             mAudioManager.setRingerModeInternal(AudioManager.RINGER_MODE_NORMAL);
         } else if (action == 1) {
-            mNoMan.setZenMode(Global.ZEN_MODE_OFF_ONLY, null, TAG);
+            mNoMan.setZenMode(ZEN_MODE_OFF, null, TAG);
             mAudioManager.setRingerModeInternal(AudioManager.RINGER_MODE_VIBRATE);
         } else if (action == 2) {
-            mNoMan.setZenMode(Global.ZEN_MODE_IMPORTANT_INTERRUPTIONS, null, TAG);
-        } else if (action == 3) {
-            mNoMan.setZenMode(Global.ZEN_MODE_ALARMS, null, TAG);
-        } else if (action == 4) {
-            mNoMan.setZenMode(Global.ZEN_MODE_NO_INTERRUPTIONS, null, TAG);
+            mNoMan.setZenMode(ZEN_MODE_IMPORTANT_INTERRUPTIONS, null, TAG);
         }
     }
 
@@ -561,22 +521,47 @@ public class KeyHandler implements DeviceKeyHandler {
             mAudioManager.adjustSuggestedStreamVolume(AudioManager.ADJUST_LOWER,AudioManager.USE_DEFAULT_STREAM_TYPE,AudioManager.FLAG_SHOW_UI);
             return true;
         } else if (value.equals(AppSelectListPreference.BROWSE_SCROLL_DOWN_ENTRY)) {
-            LiquidUtils.sendKeycode(KeyEvent.KEYCODE_PAGE_DOWN);
+            sendKeycode(KeyEvent.KEYCODE_PAGE_DOWN);
             return true;
         } else if (value.equals(AppSelectListPreference.BROWSE_SCROLL_UP_ENTRY)) {
-            LiquidUtils.sendKeycode(KeyEvent.KEYCODE_PAGE_UP);
+            sendKeycode(KeyEvent.KEYCODE_PAGE_UP);
             return true;
         } else if (value.equals(AppSelectListPreference.NAVIGATE_BACK_ENTRY)) {
-            LiquidUtils.sendKeycode(KeyEvent.KEYCODE_BACK);
+            sendKeycode(KeyEvent.KEYCODE_BACK);
             return true;
         } else if (value.equals(AppSelectListPreference.NAVIGATE_HOME_ENTRY)) {
-            LiquidUtils.sendKeycode(KeyEvent.KEYCODE_HOME);
+            sendKeycode(KeyEvent.KEYCODE_HOME);
             return true;
         } else if (value.equals(AppSelectListPreference.NAVIGATE_RECENT_ENTRY)) {
-            LiquidUtils.sendKeycode(KeyEvent.KEYCODE_APP_SWITCH);
+            sendKeycode(KeyEvent.KEYCODE_APP_SWITCH);
             return true;
         }
         return false;
+    }
+
+    private void sendKeycode(int keycode) {
+        long when = SystemClock.uptimeMillis();
+        final KeyEvent evDown = new KeyEvent(when, when, KeyEvent.ACTION_DOWN, keycode, 0,
+                0, KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
+                KeyEvent.FLAG_FROM_SYSTEM | KeyEvent.FLAG_VIRTUAL_HARD_KEY,
+                InputDevice.SOURCE_KEYBOARD);
+        final KeyEvent evUp = KeyEvent.changeAction(evDown, KeyEvent.ACTION_UP);
+
+        final Handler handler = new Handler(Looper.getMainLooper());
+        handler.post(new Runnable() {
+            @Override
+            public void run() {
+                InputManager.getInstance().injectInputEvent(evDown,
+                        InputManager.INJECT_INPUT_EVENT_MODE_ASYNC);
+            }
+        });
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                InputManager.getInstance().injectInputEvent(evUp,
+                        InputManager.INJECT_INPUT_EVENT_MODE_ASYNC);
+            }
+        }, 20);
     }
 
     private String getGestureValueForScanCode(int scanCode) {
@@ -616,22 +601,9 @@ public class KeyHandler implements DeviceKeyHandler {
     }
 
     private String getGestureValueForFPScanCode(int scanCode) {
-        switch(scanCode) {
-            case FP_GESTURE_SWIPE_DOWN:
-                return Settings.System.getStringForUser(mContext.getContentResolver(),
+        if (FP_GESTURE_LONG_PRESS == scanCode) {
+            return Settings.System.getStringForUser(mContext.getContentResolver(),
                    GestureSettings.DEVICE_GESTURE_MAPPING_10, UserHandle.USER_CURRENT);
-            case FP_GESTURE_SWIPE_UP:
-                return Settings.System.getStringForUser(mContext.getContentResolver(),
-                   GestureSettings.DEVICE_GESTURE_MAPPING_11, UserHandle.USER_CURRENT);
-            case FP_GESTURE_SWIPE_LEFT:
-                return Settings.System.getStringForUser(mContext.getContentResolver(),
-                    GestureSettings.DEVICE_GESTURE_MAPPING_12, UserHandle.USER_CURRENT);
-            case FP_GESTURE_SWIPE_RIGHT:
-                return Settings.System.getStringForUser(mContext.getContentResolver(),
-                    GestureSettings.DEVICE_GESTURE_MAPPING_13, UserHandle.USER_CURRENT);
-            case FP_GESTURE_LONG_PRESS:
-                return Settings.System.getStringForUser(mContext.getContentResolver(),
-                    GestureSettings.DEVICE_GESTURE_MAPPING_14, UserHandle.USER_CURRENT);
         }
         return null;
     }
@@ -648,7 +620,7 @@ public class KeyHandler implements DeviceKeyHandler {
 
     private void updateDozeSettings() {
         String value = Settings.System.getStringForUser(mContext.getContentResolver(),
-                    Settings.System.OMNI_DEVICE_FEATURE_SETTINGS,
+                    Settings.System.CUSTOM_DEVICE_FEATURE_SETTINGS,
                     UserHandle.USER_CURRENT);
         if (DEBUG) Log.i(TAG, "Doze settings = " + value);
         if (!TextUtils.isEmpty(value)) {
@@ -670,15 +642,5 @@ public class KeyHandler implements DeviceKeyHandler {
 
     IStatusBarService getStatusBarService() {
         return IStatusBarService.Stub.asInterface(ServiceManager.getService("statusbar"));
-    }
-
-    @Override
-    public boolean getCustomProxiIsNear(SensorEvent event) {
-        return event.values[0] == 1;
-    }
-
-    @Override
-    public String getCustomProxiSensor() {
-        return "com.oneplus.sensor.pocket";
     }
 }

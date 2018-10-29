@@ -43,6 +43,7 @@ public class DeviceSettings extends PreferenceFragment implements
     private static final String KEY_SLIDER_MODE_TOP = "slider_mode_top";
     private static final String KEY_SLIDER_MODE_CENTER = "slider_mode_center";
     private static final String KEY_SLIDER_MODE_BOTTOM = "slider_mode_bottom";
+    //private static final String KEY_BUTTON_CATEGORY = "buttons_category";
     private static final String KEY_CATEGORY_GRAPHICS = "graphics";
 
     public static final String KEY_SRGB_SWITCH = "srgb";
@@ -50,14 +51,20 @@ public class DeviceSettings extends PreferenceFragment implements
     public static final String KEY_PROXI_SWITCH = "proxi";
     public static final String KEY_DCI_SWITCH = "dci";
     public static final String KEY_NIGHT_SWITCH = "night";
+    public static final String KEY_ADAPTIVE_SWITCH = "adaptive";
+    public static final String KEY_ONEPLUS_SWITCH = "oneplus";
 
-    public static final String SLIDER_DEFAULT_VALUE = "4,2,0";
+    public static final String KEY_OTG_SWITCH = "otg_switch";
+
+    public static final String SLIDER_DEFAULT_VALUE = "2,1,0";
 
     private ListPreference mSliderModeTop;
     private ListPreference mSliderModeCenter;
     private ListPreference mSliderModeBottom;
     private static TwoStatePreference mHBMModeSwitch;
     //private PreferenceCategory buttonCategory;
+    private static TwoStatePreference mOtgSwitch;
+
 
     @Override
     public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
@@ -88,6 +95,11 @@ public class DeviceSettings extends PreferenceFragment implements
         mHBMModeSwitch.setEnabled(HBMModeSwitch.isSupported());
         mHBMModeSwitch.setChecked(HBMModeSwitch.isCurrentlyEnabled(this.getContext()));
         mHBMModeSwitch.setOnPreferenceChangeListener(new HBMModeSwitch());
+
+        mOtgSwitch = (TwoStatePreference) findPreference(KEY_OTG_SWITCH);
+        mOtgSwitch.setEnabled(UsbOtgSwitch.isSupported());
+        mOtgSwitch.setChecked(UsbOtgSwitch.isCurrentlyEnabled(this.getContext()));
+        mOtgSwitch.setOnPreferenceChangeListener(new UsbOtgSwitch());
     }
 
     @Override
@@ -121,7 +133,7 @@ public class DeviceSettings extends PreferenceFragment implements
 
     private int getSliderAction(int position) {
         String value = Settings.System.getString(getContext().getContentResolver(),
-                    Settings.System.OMNI_BUTTON_EXTRA_KEY_MAPPING);
+                    Settings.System.CUSTOM_BUTTON_EXTRA_KEY_MAPPING);
         final String defaultValue = SLIDER_DEFAULT_VALUE;
 
         if (value == null) {
@@ -139,7 +151,7 @@ public class DeviceSettings extends PreferenceFragment implements
 
     private void setSliderAction(int position, int action) {
         String value = Settings.System.getString(getContext().getContentResolver(),
-                    Settings.System.OMNI_BUTTON_EXTRA_KEY_MAPPING);
+                    Settings.System.CUSTOM_BUTTON_EXTRA_KEY_MAPPING);
         final String defaultValue = SLIDER_DEFAULT_VALUE;
 
         if (value == null) {
@@ -152,7 +164,7 @@ public class DeviceSettings extends PreferenceFragment implements
             parts[position] = String.valueOf(action);
             String newValue = TextUtils.join(",", parts);
             Settings.System.putString(getContext().getContentResolver(),
-                    Settings.System.OMNI_BUTTON_EXTRA_KEY_MAPPING, newValue);
+                    Settings.System.CUSTOM_BUTTON_EXTRA_KEY_MAPPING, newValue);
         } catch (Exception e) {
         }
     }
